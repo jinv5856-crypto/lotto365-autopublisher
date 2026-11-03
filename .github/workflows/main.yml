@@ -1,30 +1,11 @@
 
-name: Lotto365 Weekly Analysis
+name: Lotto365 Test
 
-'on':
-  workflow_dispatch:
-  schedule:
-    - cron: '20 14 * * 6'
-
-permissions:
-  contents: read
+on: workflow_dispatch
 
 jobs:
-  check:
+  test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Download repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Check uploaded files
-        run: |
-          echo "Repository files:"
-          ls -la
-          echo "Python files:"
-          find . -maxdepth 3 -name "*.py"
+      - name: Test
+        run: echo "Lotto365 OK"
