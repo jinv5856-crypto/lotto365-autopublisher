@@ -20,7 +20,7 @@ def fetch_draw(round_no=None):
         headers={"User-Agent": "Mozilla/5.0"}
     )
 
-    with urllib.request.urlopen(request, timeout=20) as response:
+    with urllib.request.urlopen(request, timeout=60) as response:
         data = json.load(response)
 
     rows = data.get("data", {}).get("list", [])
