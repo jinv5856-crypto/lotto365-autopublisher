@@ -1,12 +1,33 @@
 
-name: Lotto365 Test
+name: Lotto365 Weekly Analysis
 
 'on':
   workflow_dispatch:
+  schedule:
+    - cron: '30 13 * * 6'
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  analyze:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Test
-        run: echo "Lotto365 OK"
+      - name: Download files
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run lotto analysis
+        run: python lotto_analysis.py
+
+      - name: Save analysis report
+        uses: actions/upload-artifact@v4
+        with:
+          name: lotto-report
+          path: lotto_report.html
+          if-no-files-found: error
