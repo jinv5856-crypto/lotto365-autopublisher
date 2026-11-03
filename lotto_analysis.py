@@ -1,65 +1,199 @@
 
 import json
+import time
+import random
 import urllib.parse
 import urllib.request
+import urllib.error
 from collections import Counter
-from datetime import datetime
+from pathlib import Path
 
 API = "https://www.dhlottery.co.kr/lt645/selectPstLt645Info.do"
+CACHE = Path("lotto_draws.json")
+REPORT = Path("lotto_report.html")
+RETRIES = 3
 
 
-def fetch_draw(round_no=None):
+def validate_draw(draw):
+    round_no = int(draw["round"])
+    numbers = sorted(int(n) for n in draw["numbers"])
+    bonus = int(draw["bonus"])
+
+    if round_no < 1:
+        raise ValueError("잘못된 회차")
+
+    if len(numbers) != 6:
+        raise ValueError("당첨번호 개수 오류")
+
+    if len(set(numbers + [bonus])) != 7:
+        raise ValueError("당첨번호 중복 오류")
+
+    if not all(1 <= n <= 45 for n in numbers + [bonus]):
+        raise ValueError("당첨번호 범위 오류")
+
+    return {
+        "round": round_no,
+        "date": str(draw["date"]),
+        "numbers": numbers,
+        "bonus": bonus
+    }
+
+
+def request_json(round_no=None):
     url = API
+
     if round_no is not None:
         url += "?" + urllib.parse.urlencode({
             "srchLtEpsd": round_no
         })
 
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Mozilla/5.0"}
-    )
+    for attempt in range(1, RETRIES + 1):
+        try:
+            print(
+                f"서버 요청: {round_no or '최신'} "
+                f"({attempt}/{RETRIES})",
+                flush=True
+            )
 
-    with urllib.request.urlopen(request, timeout=60) as response:
-        data = json.load(response)
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "application/json"
+                }
+            )
+
+            with urllib.request.urlopen(
+                request, timeout=15
+            ) as response:
+                return json.load(response)
+
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError
+        ) as error:
+            print(f"연결 실패: {error}", flush=True)
+
+            if attempt == RETRIES:
+                raise RuntimeError(
+                    "동행복권 서버 연결 실패"
+                ) from error
+
+            time.sleep(attempt * 3 + random.random())
+
+
+def fetch_draw(round_no=None):
+    data = request_json(round_no)
 
     rows = data.get("data", {}).get("list", [])
+
     if not rows:
-        raise RuntimeError(f"회차 데이터 없음: {round_no}")
+        raise RuntimeError(
+            f"회차 데이터 없음: {round_no}"
+        )
 
     row = rows[0]
-    actual_round = int(row["ltEpsd"])
 
-    if round_no is not None and actual_round != round_no:
-        raise RuntimeError("요청 회차와 응답 회차가 다릅니다.")
+    draw = validate_draw({
+        "round": row["ltEpsd"],
+        "date": row["ltRflYmd"],
+        "numbers": [
+            row[f"tm{i}WnNo"]
+            for i in range(1, 7)
+        ],
+        "bonus": row["bnsWnNo"]
+    })
 
-    numbers = [int(row[f"tm{i}WnNo"]) for i in range(1, 7)]
-    bonus = int(row["bnsWnNo"])
+    if round_no is not None:
+        if draw["round"] != round_no:
+            raise RuntimeError(
+                "요청 회차와 응답 회차 불일치"
+            )
 
-    if len(set(numbers + [bonus])) != 7:
-        raise RuntimeError("당첨번호 중복 오류")
+    return draw
 
-    if not all(1 <= n <= 45 for n in numbers + [bonus]):
-        raise RuntimeError("당첨번호 범위 오류")
 
-    return {
-        "round": actual_round,
-        "date": str(row["ltRflYmd"]),
-        "numbers": sorted(numbers),
-        "bonus": bonus
-    }
+def load_cache():
+    if not CACHE.exists():
+        return {}
+
+    with CACHE.open(encoding="utf-8") as file:
+        data = json.load(file)
+
+    result = {}
+
+    for item in data:
+        draw = validate_draw(item)
+        result[draw["round"]] = draw
+
+    return result
+
+
+def save_cache(cache):
+    data = [
+        cache[key]
+        for key in sorted(cache, reverse=True)
+    ]
+
+    with CACHE.open("w", encoding="utf-8") as file:
+        json.dump(
+            data, file,
+            ensure_ascii=False,
+            indent=2
+        )
+
+
+def collect_draws():
+    cache = load_cache()
+
+    try:
+        latest = fetch_draw()
+        cache[latest["round"]] = latest
+
+    except Exception as error:
+        print(f"최신 회차 조회 실패: {error}")
+
+        if not cache:
+            raise RuntimeError(
+                "서버 접속 실패 및 저장 데이터 없음. "
+                "분석과 발행을 중단합니다."
+            ) from error
+
+        raise RuntimeError(
+            "최신 회차 확인 실패. "
+            "오래된 분석의 자동 발행을 방지합니다."
+        ) from error
+
+    latest_round = latest["round"]
+    draws = []
+
+    for round_no in range(
+        latest_round,
+        latest_round - 20,
+        -1
+    ):
+        if round_no in cache:
+            draws.append(cache[round_no])
+            continue
+
+        time.sleep(1.5)
+
+        draw = fetch_draw(round_no)
+        cache[round_no] = draw
+        draws.append(draw)
+
+    if len(draws) != 20:
+        raise RuntimeError("20회 데이터 부족")
+
+    save_cache(cache)
+
+    return draws
 
 
 def main():
-    latest = fetch_draw()
-    draws = [latest]
-
-    for round_no in range(
-        latest["round"] - 1,
-        latest["round"] - 20,
-        -1
-    ):
-        draws.append(fetch_draw(round_no))
+    draws = collect_draws()
+    latest = draws[0]
 
     counts = Counter(
         number
@@ -113,8 +247,10 @@ def main():
         "<p>과거 통계는 미래 당첨을 보장하지 않습니다.</p>"
     ])
 
-    with open("lotto_report.html", "w", encoding="utf-8") as file:
-        file.write("\n".join(html))
+    REPORT.write_text(
+        "\n".join(html),
+        encoding="utf-8"
+    )
 
     print("최근 20회 분석 성공")
     print("최신 회차:", latest["round"])
