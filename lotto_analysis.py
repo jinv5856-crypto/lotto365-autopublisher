@@ -1,1 +1,1 @@
-print("Lotto365 OK")
+print("Lotto365 Analysis Ready")
